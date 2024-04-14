@@ -11,7 +11,7 @@ const default_Rooms = {
 	CURRENT_DRAWER : null,
 	CURRENT_WORD : ''
 }
-const ENDPOINT = process.env.URL;
+const ENDPOINT = "mdxxc5zcoe.execute-api.ap-south-1.amazonaws.com/production";
 const client = new AWS.ApiGatewayManagementApi({endpoint: ENDPOINT});
  
 const sendToAll = async (ids, payload) => {
@@ -46,34 +46,38 @@ export const $connect = async(meta) => {
 		meta,
 		`Welcome to Pictionary Game ${meta}`
 	);
-	
 	PLAYERS[meta] = { "connection_Id": meta, "score": 0, "roomId": null };
-	const playerIds = Object.keys(PLAYERS).filter(id => id !== meta);
-
-	await sendToAll(playerIds, message);
+	await sendToOne(meta, message);
 }
 
-export const joinGroup = async(meta, payload) => {
-	const roomId = payload.roomId;
-	PLAYERS[meta] = PLAYERS[meta] || { "connection_Id": meta, "score": 0, "roomId": null };
-	PLAYERS[meta].roomId = roomId;
-	ROOMS[roomId] = ROOMS[roomId] || default_Rooms;
-	if(ROOMS[roomId].gameStarted) {
-		await sendToOne(meta, createMessage(
-			"error",
-			meta,
-			`Can't join the group the game has already started`
+export const joinGroup = async (meta, payload) => {
+	const { roomId } = payload;
+	PLAYERS[meta].roomId = roomId
 
-		));
-		return;
-	}
+	ROOMS[roomId] = !ROOMS[roomId] ? {...default_Rooms, ids: []} : ROOMS[roomId];
 	ROOMS[roomId].ids.push(meta);
 
-	const messageToAll = createMessage(
+    if (ROOMS[roomId].gameStarted) {
+        await sendToOne(meta, createMessage(
+            "error",
+            meta,
+            `Can't join the group, the game has already started`
+        ));
+        return;
+    }
+
+    const playerIds = ROOMS[roomId].ids.map(id => ({
+        "connectionId": PLAYERS[id].connection_Id,
+        "score": PLAYERS[id].score
+    }));
+
+	console.log(playerIds);
+
+    const messageToAll = createMessage(
         "JoinGroup",
         null,
         {
-            playerIds: ROOMS[roomId].ids,
+            playerIds,
             room: roomId,
             message: `Welcome to Room ${roomId}, player ${meta}!`
         }
@@ -84,13 +88,13 @@ export const joinGroup = async(meta, payload) => {
         meta,
         "You have successfully joined the group"
     );
-	
 
-	await Promise.all([
+    await Promise.all([
         sendToAll(Object.values(ROOMS[roomId].ids), messageToAll),
         sendToOne(meta, messageToOne)
     ]);
 }
+
 
 export const handleDisconnect = async (meta) => {
     // Logic to handle player disconnection
@@ -212,8 +216,8 @@ export const endGame = async (meta) => {
 
 	ROOMS[roomId].ids.map((id) => {
 		PlayerScore.push({
-			"connectionId" : PLAYERS[id].connectionId, 
-			"Score" : PLAYERS[id].score
+			"connectionId" : PLAYERS[id].connection_Id, 
+			"score" : PLAYERS[id].score
 		});
 	})
 
@@ -242,6 +246,17 @@ export const handleGuess = async(meta, payload) => {
   	const correctGuess = guess === ROOMS[roomId].CURRENT_WORD;
 	const PlayerScore = [];
 
+
+	if(ROOMS[roomId].gameStarted == false){
+		await sendToOne(meta, createMessage(
+			"error",
+			meta,
+			{
+				message: "The game has not started yet"
+			}
+		))
+	}
+
 	if(meta == ROOMS[roomId].CURRENT_DRAWER){
 		await sendToOne(meta, createMessage(
 			"error",
@@ -264,17 +279,17 @@ export const handleGuess = async(meta, payload) => {
 		return;
 	} 
 
+	if(correctGuess){
+		PLAYERS[meta].score++;
+	}
+
 	ROOMS[roomId].ids.map((id) => {
 		PlayerScore.push({
-			"connectionId" : PLAYERS[id].connectionId, 
-			"Score" : PLAYERS[id].score
+			"connectionId" : PLAYERS[id].connection_Id, 
+			"score" : PLAYERS[id].score
 		});
 	})
 
-	if(correctGuess){
-		PLAYERS[meta].score++;
-		startGame();
-	}
 	// Notify all players about the guess and whether it was correct
 	await sendToAll(Object.keys(PLAYERS), createMessage(
 		"handleGuess",
@@ -283,11 +298,10 @@ export const handleGuess = async(meta, payload) => {
 			guesser: meta,
 			guess: guess,
 			correct: correctGuess,
-			score: JSON.stringify(PlayerScore)
+			score: PlayerScore
 		}
 	));
 } 
-
 
 // handle Drawing -----
 export const handleDrawing = async (meta, payload) => {
